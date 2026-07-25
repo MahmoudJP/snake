@@ -2,7 +2,8 @@
 
 Last reviewed: 2026-07-26
 
-- Intended GitHub visibility: Public
+- GitHub repository: `MahmoudJP/snake`
+- Repository visibility: Public
 - Local Git branch: `main`
 - Type: Static HTML/CSS/JavaScript game
 - Source imported without macOS metadata.
