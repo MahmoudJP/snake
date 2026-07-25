@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Neon Snake</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div class="title">NEON&nbsp;SNAKE</div>
+      <div class="stats">
+        <div class="stat">
+          <div class="label">Score</div>
+          <div class="value" id="score">0</div>
+        </div>
+        <div class="stat">
+          <div class="label">Best</div>
+          <div class="value gold" id="best">0</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="board-wrap">
+      <canvas id="game" width="520" height="520"></canvas>
+      <div class="overlay" id="overlay">
+        <h2>Neon Snake</h2>
+        <p>Eat the orbs and grow. Grab the glowing diamonds for power-ups. Walls wrap around — fly straight through them!</p>
+        <div class="keys">
+          <span class="key">↑ ↓ ← →</span>
+          <span class="key">W A S D</span>
+          <span class="key">Space / P · Pause</span>
+        </div>
+        <button class="btn" id="startBtn">Play</button>
+      </div>
+    </div>
+
+    <!-- Plugins may inject extra UI controls here -->
+    <div class="dock" id="dock"></div>
+
+    <div class="footer"><span class="pulse-dot"></span>Swipe on mobile · Arrow keys on desktop</div>
+  </div>
+
+  <!-- Stable engine core (do not let plugins edit this) -->
+  <script src="js/core.js"></script>
+  <!-- Independent plugins — each owned by one agent, loaded after core -->
+  <script src="js/plugin-modes.js"></script>
+  <script src="js/plugin-fx.js"></script>
+  <script src="js/plugin-content.js"></script>
+  <script src="js/plugin-ui.js"></script>
+  <!-- Boot last, after all plugins have registered their hooks -->
+  <script>window.SnakeAPI && window.SnakeAPI.boot();</script>
+</body>
+</html>
