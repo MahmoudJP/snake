@@ -3,53 +3,66 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>Neon Snake</title>
+<meta name="theme-color" content="#070912" />
+<meta name="description" content="Neon Circuit — a fast, polished, power-up-driven Snake game for desktop and mobile." />
+<title>Neon Circuit — Snake Rebuilt</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="wrap">
-    <div class="topbar">
-      <div class="title">NEON&nbsp;SNAKE</div>
-      <div class="stats">
-        <div class="stat">
-          <div class="label">Score</div>
-          <div class="value" id="score">0</div>
-        </div>
-        <div class="stat">
-          <div class="label">Best</div>
-          <div class="value gold" id="best">0</div>
-        </div>
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+  <main class="game-shell">
+    <header class="game-header">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><b></b><em></em></span><span><small>NEON CIRCUIT</small><strong>Snake, rebuilt.</strong></span></div>
+      <div class="stats" aria-label="Game statistics">
+        <div class="stat"><small>Score</small><strong id="score">0</strong></div>
+        <div class="stat"><small>Best</small><strong id="best">0</strong></div>
+        <div class="stat"><small>Level</small><strong id="level">1</strong></div>
+        <div class="stat"><small>Combo</small><strong id="combo">—</strong></div>
       </div>
-    </div>
-
-    <div class="board-wrap">
-      <canvas id="game" width="520" height="520"></canvas>
-      <div class="overlay" id="overlay">
-        <h2>Neon Snake</h2>
-        <p>Eat the orbs and grow. Grab the glowing diamonds for power-ups. Walls wrap around — fly straight through them!</p>
-        <div class="keys">
-          <span class="key">↑ ↓ ← →</span>
-          <span class="key">W A S D</span>
-          <span class="key">Space / P · Pause</span>
+    </header>
+    <div class="game-layout">
+      <section class="play-zone" aria-label="Neon Circuit game">
+        <div class="play-meta"><span id="modeBadge"><i></i> Classic circuit</span><span id="gameStatus">Ready</span></div>
+        <div class="board-wrap">
+          <canvas id="game" width="600" height="600" tabindex="0" role="img" aria-label="Snake game board. Use the arrow keys, WASD, swipe, or the on-screen direction pad to move.">Snake game board. Keyboard and touch controls are available below.</canvas>
+          <div class="board-scan" aria-hidden="true"></div>
+          <div class="overlay" id="overlay">
+            <div class="overlay-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p class="eyebrow">CHOOSE YOUR CIRCUIT</p>
+            <h1>Move fast.<br><em>Think faster.</em></h1>
+            <p class="overlay-copy">A smoother, smarter Snake with combos, evolving arenas, special food, power-ups, and controls built for every screen.</p>
+            <div class="mode-picker" role="group" aria-label="Choose game mode">
+              <button class="mode-card active" data-mode="classic" aria-pressed="true"><span>01</span><strong>Classic</strong><small>Balanced · Wrap walls</small></button>
+              <button class="mode-card" data-mode="rush" aria-pressed="false"><span>02</span><strong>Rush</strong><small>Fast · Hard walls</small></button>
+              <button class="mode-card" data-mode="zen" aria-pressed="false"><span>03</span><strong>Zen</strong><small>Calm · No obstacles</small></button>
+            </div>
+            <button class="btn" id="startBtn"><span>Play Classic</span><b>→</b></button>
+            <div class="control-hint"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd><span>or swipe anywhere on the arena</span></div>
+          </div>
+          <div class="announcer" id="announcer" aria-live="polite" aria-atomic="true"></div>
         </div>
-        <button class="btn" id="startBtn">Play</button>
-      </div>
+        <div class="level-track" aria-label="Progress to next level"><i id="levelProgress"></i><span id="levelGoal">100 points to level 2</span></div>
+        <div class="mobile-controls" id="mobileControls" aria-label="Touch controls"></div>
+      </section>
+      <aside class="control-rail">
+        <section class="rail-card mission-card">
+          <header><small>CURRENT CIRCUIT</small><span id="difficultyPill">BALANCED</span></header>
+          <h2 id="modeName">Classic Circuit</h2><p id="modeDescription">Wrap through walls, build combos, and adapt as the arena evolves.</p>
+          <div class="mission-grid"><div><small>Food</small><strong id="foodCount">0</strong></div><div><small>Length</small><strong id="lengthCount">3</strong></div><div><small>Speed</small><strong id="speedCount">1.0×</strong></div></div>
+        </section>
+        <section class="rail-card effects-card"><header><small>ACTIVE POWERS</small><span id="effectCount">0</span></header><div id="effectList" class="effect-list"><p>No active power-ups yet.</p></div></section>
+        <section class="rail-card controls-card"><header><small>CONTROLS</small><span>DESKTOP + TOUCH</span></header><div class="keys-grid"><span><kbd>WASD</kbd><small>Move</small></span><span><kbd>ARROWS</kbd><small>Move</small></span><span><kbd>SPACE</kbd><small>Pause</small></span><span><kbd>R</kbd><small>Restart</small></span></div></section>
+        <section class="rail-card dock-card"><header><small>GAME SETTINGS</small><span>LOCAL</span></header><div class="dock" id="dock"></div></section>
+      </aside>
     </div>
-
-    <!-- Plugins may inject extra UI controls here -->
-    <div class="dock" id="dock"></div>
-
-    <div class="footer"><span class="pulse-dot"></span>Swipe on mobile · Arrow keys on desktop</div>
-  </div>
-
-  <!-- Stable engine core (do not let plugins edit this) -->
+    <footer class="game-footer"><span><i></i>Everything is stored only in this browser.</span><span id="footerTip">Tip: collect food quickly to keep your combo alive.</span></footer>
+  </main>
   <script src="js/core.js"></script>
-  <!-- Independent plugins — each owned by one agent, loaded after core -->
   <script src="js/plugin-modes.js"></script>
   <script src="js/plugin-fx.js"></script>
   <script src="js/plugin-content.js"></script>
   <script src="js/plugin-ui.js"></script>
-  <!-- Boot last, after all plugins have registered their hooks -->
   <script>window.SnakeAPI && window.SnakeAPI.boot();</script>
 </body>
 </html>

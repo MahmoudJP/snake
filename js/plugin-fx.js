@@ -117,6 +117,7 @@
   });
 
   API.on("afterEat", function (food) {
+    if (API.cfg.REDUCED_MOTION) return;
     var col = rgbStr(cur);
     spawnRing(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, col);
   });
@@ -139,9 +140,10 @@
     ctx.fillRect(0, 0, W, H);
 
     // drifting radial glow that breathes with the clock + score
-    var bx = W * 0.5 + Math.sin(clock * 0.25) * W * 0.18;
-    var by = H * 0.5 + Math.cos(clock * 0.19) * H * 0.18;
-    var rad = W * (0.45 + 0.1 * Math.sin(clock * 0.4));
+    var motionClock = API.cfg.REDUCED_MOTION ? 0 : clock;
+    var bx = W * 0.5 + Math.sin(motionClock * 0.25) * W * 0.18;
+    var by = H * 0.5 + Math.cos(motionClock * 0.19) * H * 0.18;
+    var rad = W * (0.45 + 0.1 * Math.sin(motionClock * 0.4));
     var rg = ctx.createRadialGradient(bx, by, 0, bx, by, rad);
     var ga = 0.10 + energy * 0.10;
     rg.addColorStop(0, "rgba(" + rgbStr(glow) + "," + ga.toFixed(3) + ")");
@@ -152,7 +154,7 @@
     // parallax starfield — twinkle + slow vertical drift, scaled by depth
     for (var i = 0; i < STAR_N; i++) {
       var s = stars[i];
-      s.y += s.z * (4 + energy * 8) * 0.016;          // drift down
+      if (!API.cfg.REDUCED_MOTION) s.y += s.z * (4 + energy * 8) * 0.016;
       if (s.y > H) { s.y -= H; s.x = Math.random() * W; }
       var tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(clock * (1 + s.z) + s.tw));
       var sz = s.z * (0.9 + energy * 0.6);
@@ -181,7 +183,7 @@
     // ---- 1. SILKY MOTION TRAIL behind the head ----
     // Use interpolated rx/ry; additive 'lighter' so it layers light, never
     // fights the core snake colours. Tapers along the first several segments.
-    if (snake.length) {
+    if (snake.length && !API.cfg.REDUCED_MOTION) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       var trailLen = Math.min(7, snake.length);
@@ -219,7 +221,7 @@
     }
 
     // ---- 3. EXPANDING RIPPLE RINGS (on eat) ----
-    if (rings.length) {
+    if (rings.length && !API.cfg.REDUCED_MOTION) {
       ctx.save();
       ctx.globalCompositeOperation = "lighter";
       for (var k = 0; k < rings.length; k++) {

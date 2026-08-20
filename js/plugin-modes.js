@@ -1,6 +1,4 @@
-/* PLUGIN: MODES & MECHANICS  (owner: Agent 1)
- * Game modes, obstacles, difficulty curve, combo/streak scoring.
- * Extend via SnakeAPI hooks only. Do not edit core.js or other plugins. */
+/* Neon Circuit: game modes, difficulty, combos, levels, and arena hazards. */
 (function (API) {
   "use strict";
   if (!API) return;
@@ -10,20 +8,57 @@
   var GRID = API.GRID;
   var canvas = API.canvas;
 
-  // ============================================================
-  // 1. COMBO / STREAK SYSTEM
-  // ============================================================
-  // Eating food within COMBO_WINDOW seconds keeps and grows the streak.
-  // Higher combos award escalating bonus points and a small HUD in the
-  // top-right corner (clear of the top-left effect bars and score DOM).
-  var COMBO_WINDOW = 3.0;          // seconds allowed between bites
-  var combo = 0;                   // current streak length
-  var comboTimer = 0;              // seconds remaining on the window
-  var comboPulse = 0;              // 0..1 pop animation on each bite
-  var bestCombo = 0;               // session best (for fun HUD detail)
+  var MODES = {
+    classic: {
+      name: "Classic Circuit", difficulty: "BALANCED",
+      description: "Wrap through walls, build combos, and adapt as the arena evolves.",
+      tip: "Tip: collect food quickly to keep your combo alive.",
+      wrap: true, obstacles: true, baseSpeed: 6.5, maxSpeed: 18,
+      obstacleStart: 50, obstacleEvery: 75, comboWindow: 3.4, levelStep: 100
+    },
+    rush: {
+      name: "Rush Protocol", difficulty: "INTENSE",
+      description: "Hard walls, an immediate speed boost, and hazards that arrive early.",
+      tip: "Rush has hard walls. Plan the exit before you chase a combo.",
+      wrap: false, obstacles: true, baseSpeed: 8.5, maxSpeed: 21,
+      obstacleStart: 25, obstacleEvery: 55, comboWindow: 4, levelStep: 125
+    },
+    zen: {
+      name: "Zen Flow", difficulty: "RELAXED",
+      description: "A calmer, obstacle-free circuit for long runs and clean movement.",
+      tip: "Zen removes arena hazards, but your own tail still matters.",
+      wrap: true, obstacles: false, baseSpeed: 5, maxSpeed: 11,
+      obstacleStart: 99999, obstacleEvery: 99999, comboWindow: 5, levelStep: 80
+    }
+  };
+
+  var combo = 0;
+  var comboTimer = 0;
+  var comboPulse = 0;
+  var bestCombo = 0;
+  var obstacles = [];
+  var nearMissCooldown = 0;
+
+  function mode() { return MODES[S.mode] || MODES.classic; }
+
+  function applyMode() {
+    var m = mode();
+    API.cfg.WALL_WRAP = m.wrap;
+    API.cfg.BASE_SPEED = m.baseSpeed;
+    API.cfg.MAX_SPEED = m.maxSpeed;
+    S.speed = m.baseSpeed;
+    API.loadBest();
+    API.emit("modechange", S.mode, m);
+  }
+
+  function setMode(id) {
+    if (!MODES[id] || S.running) return false;
+    S.mode = id;
+    applyMode();
+    return true;
+  }
 
   function comboMultiplier() {
-    // combo 1 => x1, ramps up but stays tasteful
     if (combo < 2) return 1;
     if (combo < 4) return 2;
     if (combo < 6) return 3;
@@ -32,20 +67,28 @@
   }
 
   function comboColor() {
-    if (combo < 2) return "148,163,184";   // slate
-    if (combo < 4) return "94,234,212";     // teal
-    if (combo < 6) return "250,204,21";     // amber
-    if (combo < 9) return "251,146,60";     // orange
-    return "244,63,94";                     // hot pink/red
+    if (combo < 2) return "148,163,184";
+    if (combo < 4) return "94,234,212";
+    if (combo < 6) return "250,204,21";
+    if (combo < 9) return "251,146,60";
+    return "244,63,94";
   }
 
-  // ============================================================
-  // 2. OBSTACLES / WALLS MODE
-  // ============================================================
-  // Static blocks that kill the snake on contact. Registered as blocked
-  // cells so food / power-ups never spawn on them. Count scales with score.
-  var obstacles = [];              // [{x,y,t}] t = spawn-in animation 0..1
-  var lastObstacleScore = -1;      // last score tier we spawned at
+  function updateLevel() {
+    var m = mode();
+    var nextLevel = 1 + Math.floor(S.score / m.levelStep);
+    if (nextLevel > S.level) {
+      S.level = nextLevel;
+      API.flash("LEVEL " + S.level, "94,234,212");
+      API.emit("levelup", S.level);
+    } else S.level = nextLevel;
+    API.emit("progress", {
+      level: S.level,
+      current: S.score % m.levelStep,
+      target: m.levelStep,
+      remaining: m.levelStep - (S.score % m.levelStep)
+    });
+  }
 
   function obstacleAt(x, y) {
     for (var i = 0; i < obstacles.length; i++) {
@@ -54,25 +97,18 @@
     return null;
   }
 
-  // Keep a safe radius around the snake head & food so we never spawn
-  // an obstacle that's instantly unfair.
   function cellSafeForObstacle(x, y) {
-    if (API.occupied(x, y)) return false;
+    if (API.occupied(x, y) || obstacleAt(x, y)) return false;
     if (S.food && S.food.x === x && S.food.y === y) return false;
     if (S.powerup && S.powerup.x === x && S.powerup.y === y) return false;
-    if (obstacleAt(x, y)) return false;
     var head = S.snake[0];
-    if (head) {
-      var d = Math.abs(head.x - x) + Math.abs(head.y - y);
-      if (d < 4) return false;               // breathing room ahead of snake
-    }
-    // avoid the very border so wrap-around play stays readable
+    if (head && Math.abs(head.x - x) + Math.abs(head.y - y) < 5) return false;
     if (x <= 0 || y <= 0 || x >= GRID - 1 || y >= GRID - 1) return false;
     return true;
   }
 
   function spawnObstacle() {
-    for (var tries = 0; tries < 80; tries++) {
+    for (var tries = 0; tries < 100; tries++) {
       var x = (Math.random() * GRID) | 0;
       var y = (Math.random() * GRID) | 0;
       if (cellSafeForObstacle(x, y)) {
@@ -83,230 +119,125 @@
     return false;
   }
 
-  // Target obstacle count grows with score: 0 until 30, then +1 per 40 pts,
-  // capped so the board never gets choked.
   function targetObstacleCount() {
-    if (S.score < 30) return 0;
-    var n = 1 + Math.floor((S.score - 30) / 40);
-    return Math.min(n, 14);
+    var m = mode();
+    if (!m.obstacles || S.score < m.obstacleStart) return 0;
+    return Math.min(12, 1 + Math.floor((S.score - m.obstacleStart) / m.obstacleEvery));
   }
 
   function maybeScaleObstacles() {
     var target = targetObstacleCount();
-    while (obstacles.length < target) {
-      if (!spawnObstacle()) break;
-    }
+    while (obstacles.length < target && spawnObstacle()) {}
   }
 
-  // ============================================================
-  // 3. NEAR-MISS JUICE (cheap)
-  // ============================================================
-  // After a step, if the head sits orthogonally adjacent to its own body
-  // or an obstacle, emit a couple of tiny sparks. Throttled to stay cheap.
-  var nearMissCooldown = 0;
-
   function checkNearMiss() {
-    if (nearMissCooldown > 0) return;
+    if (nearMissCooldown > 0 || API.cfg.REDUCED_MOTION) return;
     var head = S.snake[0];
     if (!head) return;
     var dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
     for (var i = 0; i < dirs.length; i++) {
-      var nx = head.x + dirs[i][0];
-      var ny = head.y + dirs[i][1];
-      // skip the cell directly behind the head (that's our own neck)
+      var nx = head.x + dirs[i][0], ny = head.y + dirs[i][1];
       if (S.snake[1] && nx === S.snake[1].x && ny === S.snake[1].y) continue;
-      var hitBody = false;
-      // start at 2 to skip the neck segment
-      for (var j = 2; j < S.snake.length; j++) {
-        if (S.snake[j].x === nx && S.snake[j].y === ny) { hitBody = true; break; }
+      var danger = obstacleAt(nx, ny);
+      for (var j = 2; !danger && j < S.snake.length; j++) {
+        if (S.snake[j].x === nx && S.snake[j].y === ny) danger = true;
       }
-      var hitObs = obstacleAt(nx, ny);
-      if (hitBody || hitObs) {
-        var px = head.x * CELL + CELL / 2;
-        var py = head.y * CELL + CELL / 2;
-        var col = hitObs ? "148,163,184" : "45,212,191";
-        API.spawnParticles(px, py, col, 3);
-        nearMissCooldown = 0.18;
-        return;
+      if (danger) {
+        API.spawnParticles(head.x * CELL + CELL / 2, head.y * CELL + CELL / 2, "94,234,212", 3);
+        nearMissCooldown = 0.22; return;
       }
     }
   }
 
-  // ============================================================
-  // HOOKS
-  // ============================================================
-
   API.on("init", function () {
+    applyMode();
     combo = 0; comboTimer = 0; comboPulse = 0; bestCombo = 0;
-    obstacles = []; lastObstacleScore = -1; nearMissCooldown = 0;
+    obstacles = []; nearMissCooldown = 0; S.level = 1;
+    updateLevel();
+    API.emit("combochange", { combo: 0, multiplier: 1, best: 0, remaining: 0 });
   });
 
-  // Mark obstacle cells as blocked so food / power-ups avoid them.
-  API.on("blockCell", function (cell) {
-    return !!obstacleAt(cell.x, cell.y);
-  });
+  API.on("blockCell", function (cell) { return !!obstacleAt(cell.x, cell.y); });
 
-  // Detect hitting an obstacle -> game over. The 'collide' hook only fires
-  // for wall/self, so we check obstacles here in beforeStep against the
-  // resolved head position. WALL_WRAP is on, so wrap the head first to
-  // match where the snake will actually land.
   API.on("beforeStep", function (data) {
+    if (S.effects.ghost > 0 || !mode().obstacles) return;
     var h = data.head;
-    var hx = (h.x + GRID) % GRID;
-    var hy = (h.y + GRID) % GRID;
-    if (S.effects.ghost > 0) return;   // ghost passes through everything
+    var hx = API.cfg.WALL_WRAP ? (h.x + GRID) % GRID : h.x;
+    var hy = API.cfg.WALL_WRAP ? (h.y + GRID) % GRID : h.y;
     if (obstacleAt(hx, hy)) {
-      var px = hx * CELL + CELL / 2;
-      var py = hy * CELL + CELL / 2;
-      API.spawnParticles(px, py, "248,113,113", 20);
-      API.flash("CRASH", "248,113,113");
-      // Returning false from beforeStep cancels the move (death) in core.
+      API.spawnParticles(hx * CELL + CELL / 2, hy * CELL + CELL / 2, "248,113,113", 20);
+      API.flash("CIRCUIT BREAK", "248,113,113");
       return false;
     }
   });
 
-  // Combo: every food bite extends/grows the streak and awards bonuses.
   API.on("afterEat", function () {
-    if (comboTimer > 0) combo++;
-    else combo = 1;
-    comboTimer = COMBO_WINDOW;
-    comboPulse = 1;
-    if (combo > bestCombo) bestCombo = combo;
-
+    combo = comboTimer > 0 ? combo + 1 : 1;
+    comboTimer = mode().comboWindow; comboPulse = 1; bestCombo = Math.max(bestCombo, combo);
     var mult = comboMultiplier();
-    if (mult > 1) {
-      // Award the bonus on top of the base food score core already gave.
-      // base food = 10; bonus = base * (mult - 1).
-      var bonus = 10 * (mult - 1);
-      API.addScore(bonus);
-    }
-    if (combo === 5 || combo === 8 || (combo >= 10 && combo % 5 === 0)) {
-      API.flash(combo + "x COMBO!", comboColor());
-    }
+    if (mult > 1) API.addScore(10 * (mult - 1));
+    if (combo === 5 || combo === 8 || (combo >= 10 && combo % 5 === 0)) API.flash(combo + "× FLOW", comboColor());
+    updateLevel();
+    API.emit("combochange", { combo: combo, multiplier: mult, best: bestCombo, remaining: comboTimer });
   });
 
-  // After each step: scale obstacles, run near-miss juice.
+  API.on("score", updateLevel);
+
   API.on("afterStep", function () {
     maybeScaleObstacles();
-    // animate obstacle spawn-in
-    for (var i = 0; i < obstacles.length; i++) {
-      if (obstacles[i].t < 1) obstacles[i].t = Math.min(1, obstacles[i].t + 0.15);
-    }
+    for (var i = 0; i < obstacles.length; i++) obstacles[i].t = Math.min(1, obstacles[i].t + 0.15);
     checkNearMiss();
   });
 
-  // Per-frame timers (combo window, pulses, cooldowns).
   API.on("tick", function (dt) {
     if (comboTimer > 0) {
       comboTimer -= dt;
-      if (comboTimer <= 0) { combo = 0; comboTimer = 0; }
+      if (comboTimer <= 0) {
+        combo = 0; comboTimer = 0;
+        API.emit("combochange", { combo: 0, multiplier: 1, best: bestCombo, remaining: 0 });
+      }
     }
-    if (comboPulse > 0) comboPulse = Math.max(0, comboPulse - dt * 3);
-    if (nearMissCooldown > 0) nearMissCooldown = Math.max(0, nearMissCooldown - dt);
+    comboPulse = Math.max(0, comboPulse - dt * 3);
+    nearMissCooldown = Math.max(0, nearMissCooldown - dt);
   });
 
-  // 3. DIFFICULTY CURVE: a subtle multiplicative ramp on top of core's
-  // base speed ramp. Grows gently with food eaten, capped at +35%.
-  API.on("speed", function () {
-    var ramp = 1 + Math.min(0.35, S.foodEaten * 0.012);
-    return ramp;
-  });
+  API.on("speed", function () { return 1 + Math.min(S.mode === "zen" ? 0.12 : 0.32, S.foodEaten * 0.011); });
 
-  // ---- rendering: obstacles behind everything ----
   API.on("renderBg", function (ctx) {
-    if (!obstacles.length) return;
     for (var i = 0; i < obstacles.length; i++) {
-      var o = obstacles[i];
-      var ease = o.t * o.t * (3 - 2 * o.t);   // smoothstep
-      var size = CELL * (0.62 + 0.28 * ease);
-      var ox = o.x * CELL + (CELL - size) / 2;
-      var oy = o.y * CELL + (CELL - size) / 2;
-      // glow
-      ctx.fillStyle = "rgba(148,163,184," + (0.12 * ease) + ")";
-      API.roundRect(ox - 3, oy - 3, size + 6, size + 6, 6);
-      ctx.fill();
-      // body
-      ctx.save();
-      ctx.globalAlpha = 0.92 * ease;
+      var o = obstacles[i], ease = o.t * o.t * (3 - 2 * o.t);
+      var size = CELL * (0.62 + 0.28 * ease), ox = o.x * CELL + (CELL - size) / 2, oy = o.y * CELL + (CELL - size) / 2;
+      ctx.save(); ctx.globalAlpha = ease; ctx.shadowColor = "rgba(248,113,113,.45)"; ctx.shadowBlur = 10;
       var g = ctx.createLinearGradient(ox, oy, ox, oy + size);
-      g.addColorStop(0, "rgba(100,116,139,1)");
-      g.addColorStop(1, "rgba(51,65,85,1)");
-      ctx.fillStyle = g;
-      API.roundRect(ox, oy, size, size, 5);
-      ctx.fill();
-      // hazard cross-hatch highlight
-      ctx.strokeStyle = "rgba(226,232,240,0.25)";
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(ox + size * 0.25, oy + size * 0.25);
-      ctx.lineTo(ox + size * 0.75, oy + size * 0.75);
-      ctx.moveTo(ox + size * 0.75, oy + size * 0.25);
-      ctx.lineTo(ox + size * 0.25, oy + size * 0.75);
-      ctx.stroke();
-      ctx.restore();
+      g.addColorStop(0, "#64748b"); g.addColorStop(1, "#283548");
+      ctx.fillStyle = g; API.roundRect(ox, oy, size, size, 6); ctx.fill();
+      ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(248,113,113,.7)"; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(ox + size * .26, oy + size * .26); ctx.lineTo(ox + size * .74, oy + size * .74);
+      ctx.moveTo(ox + size * .74, oy + size * .26); ctx.lineTo(ox + size * .26, oy + size * .74); ctx.stroke(); ctx.restore();
     }
   });
 
-  // ---- rendering: combo HUD top-right ----
   API.on("render", function (ctx) {
-    if (combo < 2) return;   // only show once a streak is actually building
-
-    var pad = 12;
-    var w = 92;
-    var h = 40;
-    var x = canvas.width - w - pad;
-    var y = pad;
-    var col = comboColor();
-    var pop = 1 + comboPulse * 0.12;
-
-    ctx.save();
-    ctx.translate(x + w / 2, y + h / 2);
-    ctx.scale(pop, pop);
-    ctx.translate(-(x + w / 2), -(y + h / 2));
-
-    // panel
-    ctx.fillStyle = "rgba(2,12,18,0.55)";
-    API.roundRect(x, y, w, h, 8);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(" + col + ",0.7)";
-    ctx.lineWidth = 1.5;
-    API.roundRect(x, y, w, h, 8);
-    ctx.stroke();
-
-    // combo count
-    ctx.fillStyle = "rgb(" + col + ")";
-    ctx.shadowColor = "rgb(" + col + ")";
-    ctx.shadowBlur = 10 + comboPulse * 14;
-    ctx.font = "bold 22px sans-serif";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-    ctx.fillText(combo + "x", x + 10, y + h / 2 + 1);
-    ctx.shadowBlur = 0;
-
-    // multiplier label
-    var mult = comboMultiplier();
-    ctx.fillStyle = "#cbd5e1";
-    ctx.font = "600 9px sans-serif";
-    ctx.fillText("COMBO", x + 48, y + 13);
-    ctx.fillStyle = "rgb(" + col + ")";
-    ctx.font = "bold 11px sans-serif";
-    ctx.fillText((mult > 1 ? mult + "x pts" : "build!"), x + 48, y + 28);
-
-    // shrinking timer bar
-    var frac = Math.max(0, comboTimer / COMBO_WINDOW);
-    ctx.fillStyle = "rgba(255,255,255,0.08)";
-    API.roundRect(x + 8, y + h - 6, w - 16, 3, 1.5);
-    ctx.fill();
-    ctx.fillStyle = "rgb(" + col + ")";
-    API.roundRect(x + 8, y + h - 6, (w - 16) * frac, 3, 1.5);
-    ctx.fill();
-
-    ctx.restore();
+    if (combo < 2) return;
+    var w = 112, h = 46, x = canvas.width - w - 14, y = 14, col = comboColor();
+    var pop = API.cfg.REDUCED_MOTION ? 1 : 1 + comboPulse * .1;
+    ctx.save(); ctx.translate(x + w / 2, y + h / 2); ctx.scale(pop, pop); ctx.translate(-(x + w / 2), -(y + h / 2));
+    ctx.fillStyle = "rgba(4,8,18,.76)"; API.roundRect(x, y, w, h, 10); ctx.fill();
+    ctx.strokeStyle = "rgba(" + col + ",.72)"; API.roundRect(x, y, w, h, 10); ctx.stroke();
+    ctx.fillStyle = "rgb(" + col + ")"; ctx.font = "800 21px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(combo + "×", x + 10, y + 19);
+    ctx.fillStyle = "#cbd5e1"; ctx.font = "700 9px sans-serif"; ctx.fillText(comboMultiplier() + "× POINTS", x + 54, y + 18);
+    ctx.fillStyle = "rgba(255,255,255,.1)"; API.roundRect(x + 10, y + 34, w - 20, 4, 2); ctx.fill();
+    ctx.fillStyle = "rgb(" + col + ")"; API.roundRect(x + 10, y + 34, (w - 20) * Math.max(0, comboTimer / mode().comboWindow), 4, 2); ctx.fill(); ctx.restore();
   });
 
-  // Reset transient combo state on game over so it doesn't bleed visually.
   API.on("gameover", function () {
     combo = 0; comboTimer = 0; comboPulse = 0;
+    API.emit("combochange", { combo: 0, multiplier: 1, best: bestCombo, remaining: 0 });
   });
 
+  API.modes = MODES;
+  API.setMode = setMode;
+  API.getMode = mode;
+  API.getCombo = function () { return { combo: combo, multiplier: comboMultiplier(), best: bestCombo, remaining: comboTimer }; };
+  API.getObstacles = function () { return obstacles.slice(); };
 })(window.SnakeAPI);
