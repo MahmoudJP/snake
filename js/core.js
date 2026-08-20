@@ -1,5 +1,5 @@
 /* ============================================================================
- * Neon Snake — CORE ENGINE  (stable; plugins must NOT edit this file)
+ * Neon Circuit — CORE ENGINE
  *
  * Plugins extend the game through window.SnakeAPI. Each plugin lives in its own
  * file and registers behaviour via hooks, so multiple authors never touch the
@@ -48,16 +48,20 @@ window.SnakeAPI = (function () {
   const scoreEl = document.getElementById("score");
   const bestEl = document.getElementById("best");
   const overlay = document.getElementById("overlay");
-  const startBtn = document.getElementById("startBtn");
+  const gameStatus = document.getElementById("gameStatus");
+  const announcer = document.getElementById("announcer");
+  const initialOverlayHTML = overlay.innerHTML;
 
   const cfg = {
     GRID: 20,
-    BASE_SPEED: 7,
-    MAX_SPEED: 18,
-    BEST_KEY: "neonSnakeBest",
+    BASE_SPEED: 6.5,
+    MAX_SPEED: 19,
+    BEST_KEY: "neonCircuitBest",
     WALL_WRAP: true,          // pass through walls by default
     PU_LIFETIME: 7,
     PU_SPAWN_EVERY: 4,
+    REDUCED_MOTION: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+    HAPTICS: true,
   };
   const GRID = cfg.GRID;
   const CELL = canvas.width / GRID;
@@ -79,6 +83,13 @@ window.SnakeAPI = (function () {
       try { if (list[i](a) === true) veto = true; } catch (e) { console.error(name, e); }
     }
     return veto;
+  }
+  function emitCancel(name, a) {
+    const list = hooks[name]; let cancelled = false;
+    if (list) for (let i = 0; i < list.length; i++) {
+      try { if (list[i](a) === false) cancelled = true; } catch (e) { console.error(name, e); }
+    }
+    return cancelled;
   }
 
   // ---- registries (plugins add content) ----
@@ -103,9 +114,19 @@ window.SnakeAPI = (function () {
     running: false, paused: false, dead: false,
     particles: [], effects: {}, scoreMult: 1,
     foodEaten: 0, shake: 0, mode: "classic",
+    level: 1, steps: 0, effectiveSpeed: cfg.BASE_SPEED, lastReason: "",
   };
-  S.best = parseInt(localStorage.getItem(cfg.BEST_KEY) || "0", 10);
-  bestEl.textContent = S.best;
+  const inputQueue = [];
+
+  function storageGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+  function storageSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+  function bestKey() { return `${cfg.BEST_KEY}:${S.mode}`; }
+  function loadBest() {
+    S.best = parseInt(storageGet(bestKey()) || "0", 10);
+    bestEl.textContent = S.best;
+    return S.best;
+  }
+  loadBest();
 
   let acc = 0, lastTime = 0, foodPulse = 0;
   let flashMsg = null, flashTtl = 0;
@@ -133,6 +154,9 @@ window.SnakeAPI = (function () {
     return p;
   }
   function addScore(n) { S.score += n * S.scoreMult; updateScore(); }
+  function announce(text) { if (announcer) announcer.textContent = text; }
+  function setStatus(text) { if (gameStatus) gameStatus.textContent = text; }
+  function vibrate(pattern) { try { if (cfg.HAPTICS && navigator.vibrate) navigator.vibrate(pattern); } catch (e) {} }
   function grow(n) {
     const tail = S.snake[S.snake.length - 1];
     for (let i = 0; i < n; i++) S.snake.push({ x: tail.x, y: tail.y, rx: tail.x, ry: tail.y });
@@ -152,11 +176,13 @@ window.SnakeAPI = (function () {
   function flash(text, color) { flashMsg = { text, color: color || "45,212,191" }; flashTtl = 1.6; }
 
   function updateScore() {
+    S.score = Math.max(0, Math.round(S.score));
     scoreEl.textContent = S.score;
     if (S.score > S.best) {
       S.best = S.score; bestEl.textContent = S.best;
-      localStorage.setItem(cfg.BEST_KEY, String(S.best));
+      storageSet(bestKey(), String(S.best));
     }
+    emit("score", S.score);
   }
 
   function placeFood() {
@@ -222,14 +248,18 @@ window.SnakeAPI = (function () {
     S.snake = [{ x: mid - 1, y: mid }, { x: mid - 2, y: mid }, { x: mid - 3, y: mid }];
     S.snake.forEach(s => { s.rx = s.x; s.ry = s.y; });
     S.dir = { x: 1, y: 0 }; S.nextDir = { x: 1, y: 0 };
+    inputQueue.length = 0;
     S.score = 0; S.speed = cfg.BASE_SPEED;
     S.running = false; S.paused = false; S.dead = false;
     S.particles = []; S.effects = {}; S.scoreMult = 1;
     S.foodEaten = 0; S.shake = 0; S.powerup = null;
+    S.level = 1; S.steps = 0; S.lastReason = ""; S.effectiveSpeed = cfg.BASE_SPEED;
     for (const k in toasts) delete toasts[k];
     flashMsg = null; flashTtl = 0;
+    loadBest();
     placeFood();
     updateScore();
+    setStatus("Ready");
     emit("init");
   }
 
@@ -238,42 +268,68 @@ window.SnakeAPI = (function () {
     S.running = true;
     overlay.classList.add("hidden");
     lastTime = performance.now(); acc = 0;
+    setStatus("Playing");
+    announce(`${S.mode} mode started`);
     emit("start");
   }
 
   function togglePause() {
+    if (!S.running || S.dead) return;
     S.paused = !S.paused;
-    if (S.paused) setOverlay("Paused", "Take a breath.", "Resume", () => togglePause());
-    else { overlay.classList.add("hidden"); lastTime = performance.now(); }
+    if (S.paused) {
+      setStatus("Paused");
+      setOverlay("Circuit paused", "Your run is safe. Resume when you are ready.", "Resume run", () => togglePause());
+      announce("Game paused");
+    } else {
+      overlay.classList.add("hidden"); lastTime = performance.now();
+      setStatus("Playing"); announce("Game resumed");
+    }
   }
 
-  function gameOver() {
+  function gameOver(reason) {
     if (S.dead) return;
-    S.dead = true; S.running = false; S.shake = 14;
+    S.dead = true; S.running = false; S.lastReason = reason || "collision";
+    S.shake = cfg.REDUCED_MOTION ? 0 : 14;
+    setStatus("Game over"); vibrate([45, 35, 90]);
     playTone("die");
-    emit("gameover", S.score);
+    emit("gameover", S.score, S.lastReason);
     const isBest = S.score >= S.best && S.score > 0;
     setTimeout(() => {
       setOverlay(
-        `<span class="aha">احا</span>`,
-        `You scored <span class="big-score">${S.score}</span>` +
-        (isBest ? `<br><span class="new-best">★ NEW BEST ★</span>` : `<br>Best: ${S.best}`),
-        "Play Again", () => startGame()
+        "Circuit ended",
+        `<span class="big-score">${S.score}</span><span class="result-label">points in ${S.mode} mode</span>` +
+        (isBest ? `<span class="new-best">★ New personal best</span>` : `<span class="result-meta">Best ${S.best} · Level ${S.level} · ${S.foodEaten} cores</span>`),
+        "Run it again", () => startGame()
       );
+      const menuButton = document.createElement("button");
+      menuButton.className = "overlay-link"; menuButton.type = "button";
+      menuButton.textContent = "Change game mode"; menuButton.addEventListener("click", showMenu);
+      overlay.appendChild(menuButton);
+      announce(`Game over. Score ${S.score}`);
     }, 450);
   }
 
   function setOverlay(title, html, btnLabel, onClick) {
     overlay.innerHTML =
-      `<h2>${title}</h2><p>${html}</p><button class="btn" id="ovBtn">${btnLabel}</button>`;
+      `<h2>${title}</h2><div class="overlay-copy">${html}</div><button class="btn" id="ovBtn"><span>${btnLabel}</span><b aria-hidden="true">→</b></button>`;
     overlay.classList.remove("hidden");
     document.getElementById("ovBtn").addEventListener("click", onClick);
   }
 
+  function showMenu() {
+    S.running = false; S.paused = false; S.dead = false;
+    overlay.innerHTML = initialOverlayHTML;
+    overlay.classList.remove("hidden");
+    setStatus("Ready");
+    announce("Game mode menu opened");
+    emit("menu");
+  }
+
   // ---- input ----
   function setDir(x, y) {
-    if (x === -S.dir.x && y === -S.dir.y) return;
-    S.nextDir = { x, y };
+    const basis = inputQueue.length ? inputQueue[inputQueue.length - 1] : S.nextDir;
+    if ((x === -basis.x && y === -basis.y) || (x === basis.x && y === basis.y)) return;
+    if (inputQueue.length < 2) inputQueue.push({ x, y });
   }
   const keyMap = {
     ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
@@ -289,6 +345,10 @@ window.SnakeAPI = (function () {
       e.preventDefault();
       if (S.running && !S.dead) togglePause();
       else if (!S.running && !S.dead) startGame();
+    } else if (e.key === "r" || e.key === "R") {
+      e.preventDefault(); startGame();
+    } else if (e.key === "Escape" && S.running && !S.dead) {
+      e.preventDefault(); togglePause();
     }
   });
   let touchStart = null;
@@ -297,18 +357,24 @@ window.SnakeAPI = (function () {
   canvas.addEventListener("touchend", e => {
     if (!touchStart) return;
     const t = e.changedTouches[0], dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y;
-    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) { if (S.running) togglePause(); return; }
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) { touchStart = null; return; }
     if (!S.running && !S.dead) startGame();
     if (Math.abs(dx) > Math.abs(dy)) setDir(dx > 0 ? 1 : -1, 0); else setDir(0, dy > 0 ? 1 : -1);
     touchStart = null;
   });
-  startBtn && startBtn.addEventListener("click", startGame);
+  overlay.addEventListener("click", e => {
+    if (e.target.closest("#startBtn")) startGame();
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && S.running && !S.paused && !S.dead) togglePause();
+  });
 
   // ---- step ----
   function step() {
+    if (inputQueue.length) S.nextDir = inputQueue.shift();
     S.dir = S.nextDir;
     const head = { x: S.snake[0].x + S.dir.x, y: S.snake[0].y + S.dir.y };
-    if (emitVeto("beforeStep", { head }) === false) {} // plugins may mutate head
+    if (emitCancel("beforeStep", { head })) { gameOver("obstacle"); return; }
 
     const ghost = S.effects.ghost > 0;
     let hitWall = head.x < 0 || head.y < 0 || head.x >= GRID || head.y >= GRID;
@@ -317,15 +383,16 @@ window.SnakeAPI = (function () {
       if (cfg.WALL_WRAP || ghost) {
         head.x = (head.x + GRID) % GRID; head.y = (head.y + GRID) % GRID;
       } else if (!emitVeto("collide", { head, kind: "wall" })) {
-        gameOver(); return;
+        gameOver("wall"); return;
       }
     }
     if (!ghost && occupied(head.x, head.y)) {
-      if (!emitVeto("collide", { head, kind: "self" })) { gameOver(); return; }
+      if (!emitVeto("collide", { head, kind: "self" })) { gameOver("self"); return; }
     }
 
     head.rx = S.snake[0].x; head.ry = S.snake[0].y;
     S.snake.unshift(head);
+    S.steps++;
 
     // power-up pickup
     if (S.powerup && head.x === S.powerup.x && head.y === S.powerup.y) {
@@ -334,7 +401,7 @@ window.SnakeAPI = (function () {
       playTone("power");
       flash(def.glyph + "  " + def.label, def.color);
       if (def.apply) def.apply(S.powerup.type);
-      S.score += 5 * S.scoreMult; updateScore();
+      addScore(5); vibrate(22);
       S.powerup = null;
     }
 
@@ -342,11 +409,11 @@ window.SnakeAPI = (function () {
     if (S.food && head.x === S.food.x && head.y === S.food.y) {
       const fdef = S.food.type ? foodDefs[S.food.type] : null;
       const pts = fdef && fdef.points != null ? fdef.points : 10;
-      S.score += pts * S.scoreMult; S.foodEaten++; updateScore();
+      addScore(pts); S.foodEaten++; vibrate(12);
       playTone("eat");
       spawnParticles(S.food.x * CELL + CELL / 2, S.food.y * CELL + CELL / 2, fdef ? fdef.color : "244,63,94", 18);
       if (fdef && fdef.onEat) fdef.onEat();
-      S.speed = Math.min(cfg.MAX_SPEED, cfg.BASE_SPEED + S.score / 50);
+      S.speed = Math.min(cfg.MAX_SPEED, cfg.BASE_SPEED + S.score / 70);
       emit("afterEat", S.food);
       placeFood();
       if (!S.powerup && S.foodEaten % cfg.PU_SPAWN_EVERY === 0) spawnPowerup();
@@ -380,7 +447,7 @@ window.SnakeAPI = (function () {
 
   function render(interp) {
     ctx.save();
-    if (S.shake > 0) {
+    if (S.shake > 0 && !cfg.REDUCED_MOTION) {
       const s = S.shake;
       ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
       S.shake *= 0.85; if (S.shake < 0.4) S.shake = 0;
@@ -497,6 +564,7 @@ window.SnakeAPI = (function () {
     const playing = S.running && !S.paused && !S.dead;
     const speedMult = playing ? tickEffects(dt) : 1;
     const effSpeed = S.speed * speedMult;
+    S.effectiveSpeed = effSpeed;
     if (playing) {
       emit("tick", dt);
       acc += dt;
@@ -526,6 +594,7 @@ window.SnakeAPI = (function () {
     on, emit, boot, cfg, state: S, ctx, canvas, GRID, CELL,
     freeCell, occupied, addScore, grow, shrink, addEffect, toast, flash,
     spawnParticles, playTone, roundRect, registerPowerup, registerFood,
-    setOverlay, startGame, togglePause, setDir,
+    setOverlay, showMenu, startGame, togglePause, setDir, gameOver, loadBest,
+    getEffects: () => Object.keys(S.effects).map(type => ({ type, remaining: S.effects[type], ...(powerupDefs[type] || {}) })),
   };
 })();
