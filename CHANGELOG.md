@@ -7,7 +7,6 @@
 - Restore interrupted runs in a paused state with explicit Resume/Discard and validated versioned local checkpoints.
 - Add dependency-free regression coverage for all engine plugins, localization, history and interrupted-run ownership.
 
-# Changelog
 
 ## Unreleased
 
