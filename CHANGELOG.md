@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-15 — Neon Coil update
+
+- Publish the latest hardened engine, input, collision, timing and browser compatibility fixes.
+- Add English, Arabic and Japanese UI, a complete power-up/food guide, local history with Clear/Undo, and explicit End run.
+- Restore interrupted runs in a paused state with explicit Resume/Discard and validated versioned local checkpoints.
+- Add dependency-free regression coverage for all engine plugins, localization, history and interrupted-run ownership.
+
+# Changelog
+
 ## Unreleased
 
 - Rebuilt the game as **Neon Circuit** with a responsive game shell and live

@@ -29,13 +29,18 @@
     magnetAcc = 0;
     var h = head();
     var nx = S.food.x, ny = S.food.y;
-    if (Math.abs(h.x - nx) >= Math.abs(h.y - ny)) {
-      nx += h.x > nx ? 1 : (h.x < nx ? -1 : 0);
+    var dx = h.x - nx, dy = h.y - ny;
+    if (API.cfg.WALL_WRAP || S.effects.ghost > 0) {
+      if (Math.abs(dx) > GRID / 2) dx -= Math.sign(dx) * GRID;
+      if (Math.abs(dy) > GRID / 2) dy -= Math.sign(dy) * GRID;
+    }
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      nx = (nx + Math.sign(dx) + GRID) % GRID;
     } else {
-      ny += h.y > ny ? 1 : (h.y < ny ? -1 : 0);
+      ny = (ny + Math.sign(dy) + GRID) % GRID;
     }
     // don't let it land on the snake; only move into a free cell
-    if (!API.occupied(nx, ny) && nx >= 0 && ny >= 0 && nx < GRID && ny < GRID) {
+    if (API.cellAvailable(nx, ny, { ignoreFood: true })) {
       S.food.x = nx; S.food.y = ny;
     }
   });
@@ -58,7 +63,7 @@
       S.shield = true;
       // persistent badge (no countdown) until consumed
       API.toast("🛡", "Shield", "56,189,248", 1, "shield");
-      S.effects.shield = 999; // keep the toast bar visible
+      S.effects.shield = Infinity;
     }
   });
   // Consume the shield instead of dying. 'collide' veto: true prevents death.
@@ -69,9 +74,6 @@
       API.flash("🛡 SHIELD!", "56,189,248");
       var h = head();
       API.spawnParticles(h.x * CELL + CELL / 2, h.y * CELL + CELL / 2, "56,189,248", 26);
-      // if we got hit on a self-collision, the head is inside the body;
-      // nudge by trimming a couple of segments so we don't instantly re-collide.
-      if (info && info.kind === "self") API.shrink(2);
       return true; // prevent death
     }
   });
@@ -104,6 +106,10 @@
     apply: function () { API.addEffect("rainbow", 6); }
   });
   var rushAcc = 0;
+  API.on("init", function () {
+    magnetAcc = 0;
+    rushAcc = 0;
+  });
   API.on("tick", function (dt) {
     if (!(S.effects.rainbow > 0)) return;
     rushAcc += dt;
@@ -120,6 +126,7 @@
       var h = head();
       API.spawnParticles(h.x * CELL + CELL / 2, h.y * CELL + CELL / 2, "192,132,252", 24);
       var p = API.freeCell();
+      if (!p) return;
       // move only the head; body trails (gives a fun "snap" the next steps)
       h.x = p.x; h.y = p.y; h.rx = p.x; h.ry = p.y;
       API.spawnParticles(p.x * CELL + CELL / 2, p.y * CELL + CELL / 2, "192,132,252", 24);
@@ -155,27 +162,19 @@
 
   // --- Bonus Berry: worth more the faster you grab it --------------------
   // Track spawn time; award scaled bonus on eat. base points kept low.
-  var berrySpawnAt = 0;
+  var berryAge = 0;
+  API.on("foodspawn", function () { berryAge = 0; });
+  API.on("tick", function (dt) { if (S.food && S.food.type === "berry") berryAge += dt; });
   API.registerFood({
     type: "berry", color: "59,130,246", glyph: "🫐", points: 5,
     onEat: function () {
-      var elapsed = (performance.now() - berrySpawnAt) / 1000;
+      var elapsed = berryAge;
       // 40 bonus at instant grab, decaying to 0 over ~6s
       var bonus = Math.max(0, Math.round(40 * (1 - elapsed / 6)));
       if (bonus > 0) API.addScore(bonus);
       API.flash("BERRY +" + (5 + bonus), "59,130,246");
     }
   });
-  // stamp the spawn time whenever a berry becomes the active food
-  API.on("afterStep", function () {
-    // Each placeFood() makes a fresh food object, so a new berry has no
-    // _stamped flag; stamp it once to record its spawn time.
-    if (S.food && S.food.type === "berry" && S.food._stamped !== true) {
-      S.food._stamped = true;
-      berrySpawnAt = performance.now();
-    }
-  });
-
   // --- Cherry Pair: two cherries, so an extra points bump ----------------
   API.registerFood({
     type: "cherry", color: "244,63,94", glyph: "🍒", points: 12,
@@ -185,4 +184,9 @@
     }
   });
 
+  API.registerRunState("content", {
+    capture: function () { return { magnetAcc: magnetAcc, rushAcc: rushAcc, berryAge: berryAge }; },
+    validate: function (data) { return !!data && [data.magnetAcc, data.rushAcc, data.berryAge].every(value => Number.isFinite(value) && value >= 0) && data.magnetAcc <= 0.18 && data.rushAcc <= 0.4 && data.berryAge <= 86400000; },
+    restore: function (data) { magnetAcc = data.magnetAcc; rushAcc = data.rushAcc; berryAge = data.berryAge; }
+  });
 })(window.SnakeAPI);

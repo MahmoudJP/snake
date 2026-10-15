@@ -1,20 +1,10 @@
 # Project Status
 
-Last reviewed: 2026-08-20
+Last reviewed: 2026-10-15
 
-- GitHub repository: `MahmoudJP/snake`
-- Repository visibility: Public
-- Published branch: `main`
-- Type: Static HTML/CSS/JavaScript game
-- Source imported without macOS metadata.
-- All JavaScript files passed `node --check` on Windows.
-- Public-source secrets scan passed.
-- The private Studio streams the latest public `main` files through an
-  owner-authenticated, no-store route. Every future GitHub push is therefore
-  available in Studio without a separate deployment or copied snapshot.
-- Neon Circuit rebuild completed with Classic, Rush, and Zen modes, responsive
-  touch controls, per-mode records, level/combo progression, power-ups,
-  accessibility improvements, reduced-motion support, and procedural audio.
-- Fixed the obstacle-collision cancellation path and rapid-input reversal bug.
-- Browser QA passed for mode switching, Classic movement, pause/resume, Rush
-  hard-wall game over, replay, and returning to the mode menu.
+- Application name: **Neon Coil**; existing repository and Studio route remain `snake` for compatibility.
+- Dependency-free browser game with English, Arabic and Japanese UI, three modes, 13 power-ups, six foods, local history with Clear/Undo, and explicit paused interrupted-run Resume/Discard.
+- Engine/all-plugin regressions, seven JavaScript syntax checks and whitespace checks passed before publication.
+- Runtime payload: nine static files, 140,197 bytes.
+- Studio streams published `main` through its existing authenticated route. No permissions or access boundaries are changed.
+- Browser local storage is best-effort. Physical touch, haptics and device-specific behavior remain separate acceptance gates.

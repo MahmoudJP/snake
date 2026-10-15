@@ -1,27 +1,29 @@
-/* Neon Circuit: mode selection, live telemetry, touch controls, settings, and audio. */
+/* Neon Coil: mode selection, live telemetry, touch controls, settings, and sound effects. */
 (function (API) {
   "use strict";
   if (!API) return;
+  var t = API.t;
 
   var KEYS = {
-    sound: "neonCircuitSound", music: "neonCircuitMusic",
-    effects: "neonCircuitEffects", haptics: "neonCircuitHaptics",
-    mode: "neonCircuitMode", scores: "neonCircuitScores"
+    sound: "neonCoilSound",
+    effects: "neonCoilEffects", haptics: "neonCoilHaptics",
+    mode: "neonCoilMode", scores: "neonCoilScores"
   };
 
-  function get(key, fallback) { try { var v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { return fallback; } }
-  function set(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+  function storageError() { API.cfg.STORAGE_UNAVAILABLE = true; API.emit("storageerror"); }
+  function get(key, fallback) { try { var v = localStorage.getItem(key); return v === null ? fallback : v; } catch (e) { storageError(); return fallback; } }
+  function set(key, value) { try { localStorage.setItem(key, value); return true; } catch (e) { storageError(); return false; } }
 
   var settings = {
     sound: get(KEYS.sound, "1") === "1",
-    music: get(KEYS.music, "0") === "1",
     effects: get(KEYS.effects, API.cfg.REDUCED_MOTION ? "0" : "1") === "1",
     haptics: get(KEYS.haptics, "1") === "1"
   };
   API.cfg.REDUCED_MOTION = !settings.effects;
-  API.cfg.HAPTICS = settings.haptics;
+  var hapticsSupported = typeof navigator.vibrate === "function";
+  API.cfg.HAPTICS = settings.haptics && hapticsSupported;
 
-  var actx = null, master = null, musicTimer = null, musicStep = 0;
+  var actx = null, master = null;
   function ensureAudio() {
     if (actx) return actx;
     try {
@@ -49,26 +51,12 @@
   }
   API.on("audio", sfx);
 
-  function musicBeat() {
-    if (!settings.music || !settings.sound || !actx) return;
-    var roots = [131, 131, 175, 156], chords = [[523, 622, 784], [523, 622, 784], [349, 440, 523], [311, 392, 466]];
-    var index = musicStep % 4, now = actx.currentTime + .035;
-    tone(roots[index], now, .38, "triangle", .025, null);
-    chords[index].forEach(function (n, i) { tone(n, now + i * .13, .115, "sine", .011); });
-    musicStep++;
-  }
-  function startMusic() {
-    if (musicTimer || !settings.music || !settings.sound || !ensureAudio()) return;
-    resumeAudio(); musicStep = 0; musicBeat(); musicTimer = setInterval(musicBeat, 500);
-  }
-  function stopMusic() { if (musicTimer) clearInterval(musicTimer); musicTimer = null; }
-
   function byId(id) { return document.getElementById(id); }
-  function setText(id, value) { var el = byId(id); if (el) el.textContent = value; }
+  function setText(id, value) { var el = byId(id); if (el) el.textContent = t(value); }
 
   function renderMode(id, m) {
     setText("modeName", m.name); setText("modeDescription", m.description);
-    setText("difficultyPill", m.difficulty); setText("modeBadge", "●  " + m.name);
+    setText("difficultyPill", m.difficulty); setText("modeBadge", "●  " + t(m.name));
     setText("footerTip", m.tip);
     var status = byId("difficultyPill"); if (status) status.dataset.level = m.difficulty.toLowerCase();
     document.querySelectorAll(".mode-card").forEach(function (card) {
@@ -76,12 +64,13 @@
       card.classList.toggle("active", selected); card.setAttribute("aria-pressed", selected ? "true" : "false");
     });
     var button = byId("startBtn");
-    if (button) button.innerHTML = "<span>Play " + m.name.replace(" Circuit", "").replace(" Protocol", "").replace(" Flow", "") + "</span><b aria-hidden='true'>→</b>";
+    if (button) button.innerHTML = "<span>" + t("Play " + m.name.replace(" Circuit", "").replace(" Protocol", "").replace(" Flow", "")) + "</span><b aria-hidden='true'>→</b>";
   }
 
   function chooseMode(id) {
     if (!API.modes[id]) return;
-    API.setMode(id); set(KEYS.mode, id); renderMode(id, API.modes[id]);
+    if (!API.setMode(id)) return;
+    set(KEYS.mode, id); renderMode(id, API.modes[id]);
   }
 
   function bindModeCards() {
@@ -95,7 +84,12 @@
   function renderProgress(data) {
     setText("level", data.level);
     var bar = byId("levelProgress"); if (bar) bar.style.width = Math.min(100, data.current / data.target * 100) + "%";
-    setText("levelGoal", data.remaining + " points to level " + (data.level + 1));
+    setText(
+      "levelGoal",
+      data.complete
+        ? "Level 5 · Infinite — keep the coil alive"
+        : "Level " + data.level + " · " + data.name + " — " + data.remaining + " points to " + data.nextName
+    );
   }
 
   function renderCombo(data) { setText("combo", data.combo > 1 ? data.combo + "×" : "—"); }
@@ -106,16 +100,17 @@
     setText("speedCount", (S.effectiveSpeed / (API.getMode().baseSpeed || 1)).toFixed(1) + "×");
     var effects = API.getEffects(), list = byId("effectList"); setText("effectCount", effects.length);
     if (!list) return;
-    if (!effects.length) { list.innerHTML = "<p>No active power-ups yet.</p>"; return; }
+    if (!effects.length) { list.innerHTML = "<p>" + t("No active power-ups yet.") + "</p>"; return; }
     list.innerHTML = effects.map(function (effect) {
+      var time = Number.isFinite(effect.remaining) ? Math.max(0, effect.remaining).toFixed(1) + t("s") : t("READY");
       return "<div class='effect-chip' style='--effect-color:" + (effect.color || "83,243,207") + "'><i></i><span>" +
-        (effect.glyph || "●") + " " + (effect.label || effect.type) + "</span><b>" + Math.max(0, effect.remaining).toFixed(1) + "s</b></div>";
+        (effect.glyph || "●") + " " + t(effect.label || effect.type) + "</span><b>" + time + "</b></div>";
     }).join("");
   }
 
   function button(label, icon, pressed, handler) {
     var btn = document.createElement("button"); btn.type = "button"; btn.className = "dock-button";
-    btn.innerHTML = "<i aria-hidden='true'>" + icon + "</i><span>" + label + "</span>";
+    btn.innerHTML = "<i aria-hidden='true'>" + icon + "</i><span>" + t(label) + "</span>";
     if (typeof pressed === "boolean") btn.setAttribute("aria-pressed", pressed ? "true" : "false");
     btn.addEventListener("click", handler); return btn;
   }
@@ -128,21 +123,21 @@
     });
     var sound = button("Sound", "◖)", settings.sound, function () {
       settings.sound = !settings.sound; set(KEYS.sound, settings.sound ? "1" : "0"); setPressed(sound, settings.sound);
-      if (!settings.sound) stopMusic(); else if (settings.music) startMusic();
-    });
-    var music = button("Music", "♫", settings.music, function () {
-      settings.music = !settings.music; set(KEYS.music, settings.music ? "1" : "0"); setPressed(music, settings.music);
-      if (settings.music && settings.sound) startMusic(); else stopMusic();
     });
     var effects = button("Visual effects", "✦", settings.effects, function () {
       settings.effects = !settings.effects; API.cfg.REDUCED_MOTION = !settings.effects;
       set(KEYS.effects, settings.effects ? "1" : "0"); setPressed(effects, settings.effects);
     });
-    var haptics = button("Haptics", "≈", settings.haptics, function () {
+    var haptics = button(hapticsSupported ? "Haptics" : "Haptics unavailable", "≈", settings.haptics && hapticsSupported, function () {
+      if (!hapticsSupported) return;
       settings.haptics = !settings.haptics; API.cfg.HAPTICS = settings.haptics;
       set(KEYS.haptics, settings.haptics ? "1" : "0"); setPressed(haptics, settings.haptics);
     });
-    [pause, sound, music, effects, haptics].forEach(function (btn) { dock.appendChild(btn); });
+    if (!hapticsSupported) {
+      haptics.disabled = true;
+      haptics.title = t("This browser does not support vibration.");
+    }
+    [pause, sound, effects, haptics].forEach(function (btn) { dock.appendChild(btn); });
   }
 
   function buildTouchControls() {
@@ -155,30 +150,68 @@
       "<button type='button' data-dir='down' aria-label='Move down'>↓</button></div>";
     var directions = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
     host.querySelectorAll("button").forEach(function (btn) {
-      btn.addEventListener("pointerdown", function (event) {
-        event.preventDefault(); var dir = btn.dataset.dir;
+      function activate() {
+        var dir = btn.dataset.dir;
         if (dir === "pause") {
           if (API.state.running && !API.state.dead) API.togglePause(); else API.startGame();
           return;
         }
         if (!API.state.running && !API.state.dead) API.startGame();
         API.setDir(directions[dir][0], directions[dir][1]);
-      });
+      }
+      btn.addEventListener("click", activate);
     });
+    if (window.NeonI18n) window.NeonI18n.translate(host);
   }
 
-  function readScores() { try { return JSON.parse(get(KEYS.scores, "[]")) || []; } catch (e) { return []; } }
-  function saveScore(score) {
-    if (!score) return;
-    var scores = readScores(); scores.unshift({ score: score, mode: API.state.mode, at: Date.now() });
-    set(KEYS.scores, JSON.stringify(scores.slice(0, 10)));
+  function historyRaw() {
+    try { var value = localStorage.getItem(KEYS.scores); return value === null ? "[]" : value; }
+    catch (_) { storageError(); return null; }
   }
+  function parseScores(raw) {
+    try {
+      if (raw === null) return [];
+      if (raw.length > 32768) return [];
+      var scores = JSON.parse(raw);
+      return Array.isArray(scores) ? scores.filter(function (entry) {
+        return entry && Number.isSafeInteger(entry.score) && entry.score >= 0 &&
+          Object.prototype.hasOwnProperty.call(API.modes, entry.mode) && Number.isFinite(entry.at) && entry.at >= 0 && entry.at <= 8640000000000000;
+      }).slice(0, 10) : [];
+    } catch (e) { return []; }
+  }
+  function readScores() { return parseScores(historyRaw()); }
+  function saveScore(score) {
+    if (!Number.isSafeInteger(score) || score < 0) return;
+    var raw = historyRaw(); if (raw === null) return;
+    try {
+      if (raw.length > 32768 || !Array.isArray(JSON.parse(raw))) throw new Error("Invalid history");
+    } catch (e) {
+      // Keep corrupt bytes recoverable; never silently overwrite them.
+      if (raw.length > 32768 || !set(KEYS.scores + "Recovery", raw)) { storageError(); return; }
+    }
+    var scores = parseScores(raw); scores.unshift({ score: score, mode: API.state.mode, at: Date.now(), level: API.state.level, foodEaten: API.state.foodEaten });
+    set(KEYS.scores, JSON.stringify(scores.slice(0, 10)));
+    API.emit("historychange");
+  }
+
+  API.readScores = readScores;
+  API.clearScores = function () {
+    var previous = historyRaw(); if (previous === null) return null;
+    if (!set(KEYS.scores, "[]")) return null;
+    API.emit("historychange");
+    return function () {
+      if (historyRaw() !== "[]") return false;
+      if (!set(KEYS.scores, previous)) return false;
+      API.emit("historychange"); return true;
+    };
+  };
 
   var telemetryTimer = 0;
   API.on("tick", function (dt) { telemetryTimer += dt; if (telemetryTimer > .1) { telemetryTimer = 0; renderTelemetry(); } });
   API.on("afterStep", renderTelemetry);
-  API.on("start", function () { renderTelemetry(); if (settings.music && settings.sound) startMusic(); });
-  API.on("gameover", function (score) { stopMusic(); saveScore(score); renderTelemetry(); });
+  API.on("start", renderTelemetry);
+  API.on("restored", function () { renderMode(API.state.mode, API.modes[API.state.mode]); renderTelemetry(); });
+  API.on("gameover", function (score) { saveScore(score); renderTelemetry(); });
   API.on("init", renderTelemetry);
   API.on("modechange", renderMode);
   API.on("progress", renderProgress);

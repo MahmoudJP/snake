@@ -1,4 +1,4 @@
-/* Neon Circuit: game modes, difficulty, combos, levels, and arena hazards. */
+/* Neon Coil: game modes, difficulty, combos, five stages, and arena hazards. */
 (function (API) {
   "use strict";
   if (!API) return;
@@ -7,28 +7,35 @@
   var CELL = API.CELL;
   var GRID = API.GRID;
   var canvas = API.canvas;
+  var LEVELS = [
+    { name: "Ignition", note: "Find the rhythm" },
+    { name: "Pulse", note: "The arena wakes up" },
+    { name: "Flux", note: "Pressure starts moving" },
+    { name: "Overdrive", note: "Every turn matters" },
+    { name: "Infinite", note: "Hold the coil" }
+  ];
 
   var MODES = {
     classic: {
       name: "Classic Circuit", difficulty: "BALANCED",
       description: "Wrap through walls, build combos, and adapt as the arena evolves.",
       tip: "Tip: collect food quickly to keep your combo alive.",
-      wrap: true, obstacles: true, baseSpeed: 6.5, maxSpeed: 18,
-      obstacleStart: 50, obstacleEvery: 75, comboWindow: 3.4, levelStep: 100
+      wrap: true, obstacles: true, baseSpeed: 6.5, maxSpeed: 18, effectiveCap: 23,
+      obstacleStartLevel: 2, obstaclesPerLevel: 1, comboWindow: 3.4, levelStep: 100
     },
     rush: {
       name: "Rush Protocol", difficulty: "INTENSE",
       description: "Hard walls, an immediate speed boost, and hazards that arrive early.",
       tip: "Rush has hard walls. Plan the exit before you chase a combo.",
-      wrap: false, obstacles: true, baseSpeed: 8.5, maxSpeed: 21,
-      obstacleStart: 25, obstacleEvery: 55, comboWindow: 4, levelStep: 125
+      wrap: false, obstacles: true, baseSpeed: 8.5, maxSpeed: 21, effectiveCap: 26,
+      obstacleStartLevel: 1, obstaclesPerLevel: 2, comboWindow: 4, levelStep: 125
     },
     zen: {
       name: "Zen Flow", difficulty: "RELAXED",
       description: "A calmer, obstacle-free circuit for long runs and clean movement.",
       tip: "Zen removes arena hazards, but your own tail still matters.",
-      wrap: true, obstacles: false, baseSpeed: 5, maxSpeed: 11,
-      obstacleStart: 99999, obstacleEvery: 99999, comboWindow: 5, levelStep: 80
+      wrap: true, obstacles: false, baseSpeed: 5, maxSpeed: 11, effectiveCap: 14,
+      obstacleStartLevel: 99, obstaclesPerLevel: 0, comboWindow: 5, levelStep: 80
     }
   };
 
@@ -46,7 +53,9 @@
     API.cfg.WALL_WRAP = m.wrap;
     API.cfg.BASE_SPEED = m.baseSpeed;
     API.cfg.MAX_SPEED = m.maxSpeed;
+    API.cfg.MAX_EFFECTIVE_SPEED = m.effectiveCap;
     S.speed = m.baseSpeed;
+    S.targetSpeed = m.baseSpeed;
     API.loadBest();
     API.emit("modechange", S.mode, m);
   }
@@ -76,17 +85,25 @@
 
   function updateLevel() {
     var m = mode();
-    var nextLevel = 1 + Math.floor(S.score / m.levelStep);
+    var nextLevel = Math.min(LEVELS.length, 1 + Math.floor(Math.max(0, S.score) / m.levelStep));
+    nextLevel = Math.max(S.level, nextLevel);
     if (nextLevel > S.level) {
       S.level = nextLevel;
-      API.flash("LEVEL " + S.level, "94,234,212");
+      API.flash("LEVEL " + S.level + " · " + LEVELS[S.level - 1].name.toUpperCase(), "94,234,212");
       API.emit("levelup", S.level);
     } else S.level = nextLevel;
+    var complete = S.level === LEVELS.length;
+    var levelFloor = (S.level - 1) * m.levelStep;
+    var current = complete ? m.levelStep : Math.max(0, S.score - levelFloor);
     API.emit("progress", {
       level: S.level,
-      current: S.score % m.levelStep,
+      name: LEVELS[S.level - 1].name,
+      note: LEVELS[S.level - 1].note,
+      nextName: complete ? null : LEVELS[S.level].name,
+      complete: complete,
+      current: current,
       target: m.levelStep,
-      remaining: m.levelStep - (S.score % m.levelStep)
+      remaining: complete ? 0 : Math.max(0, m.levelStep - current)
     });
   }
 
@@ -102,7 +119,13 @@
     if (S.food && S.food.x === x && S.food.y === y) return false;
     if (S.powerup && S.powerup.x === x && S.powerup.y === y) return false;
     var head = S.snake[0];
-    if (head && Math.abs(head.x - x) + Math.abs(head.y - y) < 5) return false;
+    if (head) {
+      var dx = Math.abs(head.x - x), dy = Math.abs(head.y - y);
+      if (mode().wrap) { dx = Math.min(dx, GRID - dx); dy = Math.min(dy, GRID - dy); }
+      // Give every new block enough travel time to fully fade in before it can
+      // enter the player's path, including across a wrapping edge.
+      if (dx + dy < 7) return false;
+    }
     if (x <= 0 || y <= 0 || x >= GRID - 1 || y >= GRID - 1) return false;
     return true;
   }
@@ -112,7 +135,7 @@
       var x = (Math.random() * GRID) | 0;
       var y = (Math.random() * GRID) | 0;
       if (cellSafeForObstacle(x, y)) {
-        obstacles.push({ x: x, y: y, t: 0 });
+        obstacles.push({ x: x, y: y, t: 0, armed: false });
         return true;
       }
     }
@@ -121,8 +144,8 @@
 
   function targetObstacleCount() {
     var m = mode();
-    if (!m.obstacles || S.score < m.obstacleStart) return 0;
-    return Math.min(12, 1 + Math.floor((S.score - m.obstacleStart) / m.obstacleEvery));
+    if (!m.obstacles || S.level < m.obstacleStartLevel) return 0;
+    return Math.min(12, 1 + (S.level - m.obstacleStartLevel) * m.obstaclesPerLevel);
   }
 
   function maybeScaleObstacles() {
@@ -164,7 +187,13 @@
     var h = data.head;
     var hx = API.cfg.WALL_WRAP ? (h.x + GRID) % GRID : h.x;
     var hy = API.cfg.WALL_WRAP ? (h.y + GRID) % GRID : h.y;
-    if (obstacleAt(hx, hy)) {
+    var obstacle = obstacleAt(hx, hy);
+    if (obstacle && obstacle.armed) {
+      if (API.resolveCollision("obstacle", { x: hx, y: hy })) {
+        obstacles.splice(obstacles.indexOf(obstacle), 1);
+        API.spawnParticles(hx * CELL + CELL / 2, hy * CELL + CELL / 2, "56,189,248", 28);
+        return;
+      }
       API.spawnParticles(hx * CELL + CELL / 2, hy * CELL + CELL / 2, "248,113,113", 20);
       API.flash("CIRCUIT BREAK", "248,113,113");
       return false;
@@ -185,7 +214,10 @@
 
   API.on("afterStep", function () {
     maybeScaleObstacles();
-    for (var i = 0; i < obstacles.length; i++) obstacles[i].t = Math.min(1, obstacles[i].t + 0.15);
+    for (var i = 0; i < obstacles.length; i++) {
+      obstacles[i].t = Math.min(1, obstacles[i].t + 0.12);
+      obstacles[i].armed = obstacles[i].t >= 1;
+    }
     checkNearMiss();
   });
 
@@ -213,7 +245,12 @@
       ctx.fillStyle = g; API.roundRect(ox, oy, size, size, 6); ctx.fill();
       ctx.shadowBlur = 0; ctx.strokeStyle = "rgba(248,113,113,.7)"; ctx.lineWidth = 1.4;
       ctx.beginPath(); ctx.moveTo(ox + size * .26, oy + size * .26); ctx.lineTo(ox + size * .74, oy + size * .74);
-      ctx.moveTo(ox + size * .74, oy + size * .26); ctx.lineTo(ox + size * .26, oy + size * .74); ctx.stroke(); ctx.restore();
+      ctx.moveTo(ox + size * .74, oy + size * .26); ctx.lineTo(ox + size * .26, oy + size * .74); ctx.stroke();
+      if (!o.armed) {
+        ctx.strokeStyle = "rgba(94,234,212," + (0.35 + 0.35 * ease) + ")";
+        ctx.setLineDash([3, 3]); ctx.strokeRect(ox - 3, oy - 3, size + 6, size + 6);
+      }
+      ctx.restore();
     }
   });
 
@@ -225,7 +262,7 @@
     ctx.fillStyle = "rgba(4,8,18,.76)"; API.roundRect(x, y, w, h, 10); ctx.fill();
     ctx.strokeStyle = "rgba(" + col + ",.72)"; API.roundRect(x, y, w, h, 10); ctx.stroke();
     ctx.fillStyle = "rgb(" + col + ")"; ctx.font = "800 21px sans-serif"; ctx.textAlign = "left"; ctx.textBaseline = "middle"; ctx.fillText(combo + "×", x + 10, y + 19);
-    ctx.fillStyle = "#cbd5e1"; ctx.font = "700 9px sans-serif"; ctx.fillText(comboMultiplier() + "× POINTS", x + 54, y + 18);
+    ctx.fillStyle = "#cbd5e1"; ctx.font = "700 9px sans-serif"; ctx.fillText(API.t(comboMultiplier() + "× POINTS"), x + 54, y + 18);
     ctx.fillStyle = "rgba(255,255,255,.1)"; API.roundRect(x + 10, y + 34, w - 20, 4, 2); ctx.fill();
     ctx.fillStyle = "rgb(" + col + ")"; API.roundRect(x + 10, y + 34, (w - 20) * Math.max(0, comboTimer / mode().comboWindow), 4, 2); ctx.fill(); ctx.restore();
   });
@@ -240,4 +277,21 @@
   API.getMode = mode;
   API.getCombo = function () { return { combo: combo, multiplier: comboMultiplier(), best: bestCombo, remaining: comboTimer }; };
   API.getObstacles = function () { return obstacles.slice(); };
+  API.getLevel = function () { return { level: S.level, ...LEVELS[S.level - 1] }; };
+  API.registerRunState("modes", {
+    capture: function () { return { combo: combo, comboTimer: comboTimer, bestCombo: bestCombo, nearMissCooldown: nearMissCooldown, obstacles: obstacles.map(o => ({...o})) }; },
+    validate: function (data) {
+      return !!data && Number.isSafeInteger(data.combo) && data.combo >= 0 && Number.isSafeInteger(data.bestCombo) && data.bestCombo >= data.combo &&
+        Number.isFinite(data.comboTimer) && data.comboTimer >= 0 && data.comboTimer <= 5 &&
+        Number.isFinite(data.nearMissCooldown) && data.nearMissCooldown >= 0 && data.nearMissCooldown <= 0.22 &&
+        Array.isArray(data.obstacles) && data.obstacles.length <= 12 && data.obstacles.every(o => o && Number.isInteger(o.x) && Number.isInteger(o.y) &&
+          o.x > 0 && o.y > 0 && o.x < GRID - 1 && o.y < GRID - 1 && Number.isFinite(o.t) && o.t >= 0 && o.t <= 1 && typeof o.armed === "boolean" && o.armed === (o.t >= 1));
+    },
+    restore: function (data) {
+      combo = data.combo; comboTimer = data.comboTimer; bestCombo = data.bestCombo; comboPulse = 0;
+      nearMissCooldown = data.nearMissCooldown; obstacles = data.obstacles.map(o => ({...o}));
+      updateLevel();
+      API.emit("combochange", { combo: combo, multiplier: comboMultiplier(), best: bestCombo, remaining: comboTimer });
+    }
+  });
 })(window.SnakeAPI);

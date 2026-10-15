@@ -14,12 +14,11 @@
   //  Each theme drives the background hue + the additive snake glow.
   // ------------------------------------------------------------------ //
   var THEMES = [
-    { name: "Teal",    at: 0,   c: "45,212,191",  bg: "12,40,46"  },
-    { name: "Azure",   at: 80,  c: "56,189,248",  bg: "14,33,58"  },
-    { name: "Violet",  at: 180, c: "167,139,250", bg: "32,22,58"  },
-    { name: "Magenta", at: 300, c: "236,72,153",  bg: "48,16,42"  },
-    { name: "Ember",   at: 450, c: "251,146,60",  bg: "48,28,14"  },
-    { name: "Gold",    at: 640, c: "250,204,21",  bg: "44,38,10"  },
+    { name: "Ignition", at: 1, c: "45,212,191",  bg: "12,40,46" },
+    { name: "Pulse", at: 2, c: "56,189,248",  bg: "14,33,58" },
+    { name: "Flux", at: 3, c: "167,139,250", bg: "32,22,58" },
+    { name: "Overdrive", at: 4, c: "236,72,153", bg: "48,16,42" },
+    { name: "Infinite", at: 5, c: "250,204,21", bg: "44,38,10" }
   ];
   var themeIdx = 0;
   // live, smoothly-interpolated colour the whole plugin paints with
@@ -32,10 +31,28 @@
   function rgbStr(a) { return (a[0] | 0) + "," + (a[1] | 0) + "," + (a[2] | 0); }
   function lerp(a, b, t) { return a + (b - a) * t; }
   function lerpArr(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
+  function interpCell(previous, current, t, wraps) {
+    if (previous === undefined) return current;
+    var delta = current - previous;
+    if (wraps && delta > GRID / 2) delta -= GRID;
+    else if (wraps && delta < -GRID / 2) delta += GRID;
+    return previous + delta * t;
+  }
+  function eachVisibleWrappedPoint(rx, ry, wraps, callback) {
+    var offsets = wraps ? [-GRID, 0, GRID] : [0];
+    for (var xi = 0; xi < offsets.length; xi++) {
+      for (var yi = 0; yi < offsets.length; yi++) {
+        var cx = (rx + offsets[xi]) * CELL + CELL / 2;
+        var cy = (ry + offsets[yi]) * CELL + CELL / 2;
+        if (cx < -CELL * 2 || cy < -CELL * 2 || cx > W + CELL * 2 || cy > H + CELL * 2) continue;
+        callback(cx, cy);
+      }
+    }
+  }
 
-  function pickTheme(score) {
+  function pickTheme(level) {
     var idx = 0;
-    for (var i = 0; i < THEMES.length; i++) if (score >= THEMES[i].at) idx = i;
+    for (var i = 0; i < THEMES.length; i++) if (level >= THEMES[i].at) idx = i;
     return idx;
   }
   function applyTheme(idx, announce) {
@@ -90,8 +107,8 @@
     clock += dt;
 
     // theme milestone check
-    var want = pickTheme(S.score);
-    if (want !== themeIdx) applyTheme(want, true);
+    var want = pickTheme(S.level);
+    if (want !== themeIdx) applyTheme(want, false);
 
     // ease live colour toward target (frame-rate independent-ish)
     var k = Math.min(1, dt * 3);
@@ -107,6 +124,7 @@
   });
 
   API.on("start", function () { clock = 0; gameoverPulse = 0; });
+  API.on("restored", function () { applyTheme(pickTheme(S.level), false); clock = 0; gameoverPulse = 0; });
   API.on("init", function () {
     // reset theme to base on a fresh game
     themeIdx = 0;
@@ -122,7 +140,7 @@
     spawnRing(food.x * CELL + CELL / 2, food.y * CELL + CELL / 2, col);
   });
 
-  API.on("gameover", function () { gameoverPulse = 1; });
+  API.on("gameover", function (_score, reason) { gameoverPulse = reason === "quit" ? 0 : 1; });
 
   // ================================================================== //
   //  BACKGROUND  (drawn BEFORE grid + snake)
@@ -179,6 +197,7 @@
     var glow = cur;
     var snake = S.snake;
     var t = (S.running && !S.paused && !S.dead) ? interp : 1;
+    var wraps = API.cfg.WALL_WRAP || S.effects.ghost > 0;
 
     // ---- 1. SILKY MOTION TRAIL behind the head ----
     // Use interpolated rx/ry; additive 'lighter' so it layers light, never
@@ -189,34 +208,37 @@
       var trailLen = Math.min(7, snake.length);
       for (var i = 0; i < trailLen; i++) {
         var seg = snake[i];
-        var rx = seg.rx !== undefined ? seg.rx + (seg.x - seg.rx) * t : seg.x;
-        var ry = seg.ry !== undefined ? seg.ry + (seg.y - seg.ry) * t : seg.y;
-        var cx = rx * CELL + CELL / 2, cy = ry * CELL + CELL / 2;
+        var rx = interpCell(seg.rx, seg.x, t, wraps);
+        var ry = interpCell(seg.ry, seg.y, t, wraps);
         var fade = (1 - i / trailLen);
         var rr = CELL * (0.34 + fade * 0.32);
         var a = fade * fade * 0.5;
-        var rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr * 2.4);
-        rg.addColorStop(0, "rgba(" + rgbStr(glow) + "," + a.toFixed(3) + ")");
-        rg.addColorStop(1, "rgba(" + rgbStr(glow) + ",0)");
-        ctx.fillStyle = rg;
-        ctx.beginPath();
-        ctx.arc(cx, cy, rr * 2.4, 0, Math.PI * 2);
-        ctx.fill();
+        eachVisibleWrappedPoint(rx, ry, wraps, function (cx, cy) {
+          var rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, rr * 2.4);
+          rg.addColorStop(0, "rgba(" + rgbStr(glow) + "," + a.toFixed(3) + ")");
+          rg.addColorStop(1, "rgba(" + rgbStr(glow) + ",0)");
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(cx, cy, rr * 2.4, 0, Math.PI * 2);
+          ctx.fill();
+        });
       }
 
       // ---- 2. THEME GLOW HALO on the head — additive light only ----
       var head = snake[0];
-      var hx = (head.rx !== undefined ? head.rx + (head.x - head.rx) * t : head.x) * CELL + CELL / 2;
-      var hy = (head.ry !== undefined ? head.ry + (head.y - head.ry) * t : head.y) * CELL + CELL / 2;
+      var hrx = interpCell(head.rx, head.x, t, wraps);
+      var hry = interpCell(head.ry, head.y, t, wraps);
       var pulse = 0.6 + 0.4 * Math.sin(clock * 6);
       var hr = CELL * (1.1 + 0.25 * pulse);
-      var hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
-      hg.addColorStop(0, "rgba(" + rgbStr(glow) + "," + (0.35 * pulse).toFixed(3) + ")");
-      hg.addColorStop(1, "rgba(" + rgbStr(glow) + ",0)");
-      ctx.fillStyle = hg;
-      ctx.beginPath();
-      ctx.arc(hx, hy, hr, 0, Math.PI * 2);
-      ctx.fill();
+      eachVisibleWrappedPoint(hrx, hry, wraps, function (hx, hy) {
+        var hg = ctx.createRadialGradient(hx, hy, 0, hx, hy, hr);
+        hg.addColorStop(0, "rgba(" + rgbStr(glow) + "," + (0.35 * pulse).toFixed(3) + ")");
+        hg.addColorStop(1, "rgba(" + rgbStr(glow) + ",0)");
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.arc(hx, hy, hr, 0, Math.PI * 2);
+        ctx.fill();
+      });
       ctx.restore();
     }
 
